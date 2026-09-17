@@ -243,8 +243,12 @@ public class GpuTimeZoneDB {
    * @param rule transition rule
    * @return the time diff in seconds compared to the midnight
    */
-  private static int getTransitionRuleTimeDiffComparedToMidnight(ZoneOffsetTransitionRule rule) {
-    int localTimeInSeconds = rule.getLocalTime().toSecondOfDay();
+  static int getTransitionRuleTimeDiffComparedToMidnight(ZoneOffsetTransitionRule rule) {
+    // java.time represents 24:00 as midnight plus an end-of-day flag. Preserve the day carry in
+    // the seconds-from-midnight value consumed by the GPU transition calculation.
+    int localTimeInSeconds = rule.isMidnightEndOfDay()
+        ? 24 * 3_600
+        : rule.getLocalTime().toSecondOfDay();
     ZoneOffsetTransitionRule.TimeDefinition timeDef = rule.getTimeDefinition();
     if (ZoneOffsetTransitionRule.TimeDefinition.UTC == timeDef) {
       // UTC mode
@@ -348,12 +352,6 @@ public class GpuTimeZoneDB {
             }
 
             dstTransitionRules.forEach(dstRule -> {
-              if (dstRule.isMidnightEndOfDay()) {
-                // Checked all the timezones, there is no midnight end of day for DST rules.
-                // This is a protection in case JVM adds new timezones in the future.
-                throw new IllegalStateException("Unsupported midnight end of day for DST rules.");
-              }
-
               DayOfWeek dow = dstRule.getDayOfWeek();
               int dayOfWeek = dow != null ? dow.getValue() - 1 : -1;
               dstData.add(dstRule.getMonth().getValue()); // from 1 (January) to 12 (December)

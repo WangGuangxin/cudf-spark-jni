@@ -26,7 +26,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.DayOfWeek;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.Month;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.zone.ZoneOffsetTransition;
@@ -42,6 +45,28 @@ public class GpuTimeZoneDBTest {
 
   private static final long microsPerMillis = TimeUnit.MILLISECONDS.toMicros(1);
   private static final long MICROS_PER_SECOND = TimeUnit.SECONDS.toMicros(1);
+
+  @Test
+  void testTransitionRuleMidnightEndOfDay() {
+    for (ZoneOffsetTransitionRule.TimeDefinition timeDefinition :
+        ZoneOffsetTransitionRule.TimeDefinition.values()) {
+      ZoneOffsetTransitionRule rule = ZoneOffsetTransitionRule.of(
+          Month.MARCH,
+          1,
+          DayOfWeek.SUNDAY,
+          LocalTime.MIDNIGHT,
+          true,
+          timeDefinition,
+          ZoneOffset.UTC,
+          ZoneOffset.UTC,
+          ZoneOffset.ofHours(1));
+
+      assertEquals(
+          TimeUnit.DAYS.toSeconds(1),
+          GpuTimeZoneDB.getTransitionRuleTimeDiffComparedToMidnight(rule),
+          "midnight end-of-day must retain the 24-hour day carry for " + timeDefinition);
+    }
+  }
 
   private static TimeZone getTimeZoneForOrc(String timezoneId) {
     return TimeZone.getTimeZone(GpuTimeZoneDB.getZoneId(timezoneId));
