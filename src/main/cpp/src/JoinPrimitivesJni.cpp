@@ -20,6 +20,7 @@
 
 #include <cudf/ast/expressions.hpp>
 #include <cudf/column/column_view.hpp>
+#include <cudf/join/distinct_hash_join.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
@@ -192,6 +193,64 @@ JNIEXPORT jlongArray JNICALL Java_com_nvidia_spark_rapids_jni_JoinPrimitives_nat
     auto result = spark_rapids_jni::hash_inner_join(*left_keys, *right_keys, nulls_equal);
 
     return gather_maps_to_java(env, std::move(result));
+  }
+  JNI_CATCH(env, nullptr);
+}
+
+JNIEXPORT jlong JNICALL Java_com_nvidia_spark_rapids_jni_DistinctHashJoin_create(
+  JNIEnv* env, jclass, jlong j_keys, jboolean j_nulls_equal)
+{
+  JNI_NULL_CHECK(env, j_keys, "build keys are null", 0);
+  JNI_TRY
+  {
+    cudf::jni::auto_set_device(env);
+    auto const& keys = *reinterpret_cast<cudf::table_view const*>(j_keys);
+    auto const nulls = j_nulls_equal ? cudf::null_equality::EQUAL : cudf::null_equality::UNEQUAL;
+    auto hash        = std::make_unique<cudf::distinct_hash_join>(keys, nulls, 0.5);
+    return cudf::jni::release_as_jlong(hash);
+  }
+  JNI_CATCH(env, 0);
+}
+
+JNIEXPORT void JNICALL Java_com_nvidia_spark_rapids_jni_DistinctHashJoin_destroy(JNIEnv* env,
+                                                                                 jclass,
+                                                                                 jlong j_hash)
+{
+  JNI_TRY
+  {
+    cudf::jni::auto_set_device(env);
+    delete reinterpret_cast<cudf::distinct_hash_join*>(j_hash);
+  }
+  JNI_CATCH(env, );
+}
+
+JNIEXPORT jlongArray JNICALL Java_com_nvidia_spark_rapids_jni_DistinctHashJoin_innerJoin(
+  JNIEnv* env, jclass, jlong j_hash, jlong j_probe)
+{
+  JNI_NULL_CHECK(env, j_hash, "hash join is null", nullptr);
+  JNI_NULL_CHECK(env, j_probe, "probe keys are null", nullptr);
+  JNI_TRY
+  {
+    cudf::jni::auto_set_device(env);
+    auto const& hash   = *reinterpret_cast<cudf::distinct_hash_join const*>(j_hash);
+    auto const& probe  = *reinterpret_cast<cudf::table_view const*>(j_probe);
+    auto [left, right] = hash.inner_join(probe);
+    return gather_maps_to_java(env, {std::move(*left), std::move(*right)});
+  }
+  JNI_CATCH(env, nullptr);
+}
+
+JNIEXPORT jlongArray JNICALL Java_com_nvidia_spark_rapids_jni_DistinctHashJoin_leftJoin(
+  JNIEnv* env, jclass, jlong j_hash, jlong j_probe)
+{
+  JNI_NULL_CHECK(env, j_hash, "hash join is null", nullptr);
+  JNI_NULL_CHECK(env, j_probe, "probe keys are null", nullptr);
+  JNI_TRY
+  {
+    cudf::jni::auto_set_device(env);
+    auto const& hash  = *reinterpret_cast<cudf::distinct_hash_join const*>(j_hash);
+    auto const& probe = *reinterpret_cast<cudf::table_view const*>(j_probe);
+    return gather_single_map_to_java(env, std::move(*hash.left_join(probe)));
   }
   JNI_CATCH(env, nullptr);
 }

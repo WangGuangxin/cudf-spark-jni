@@ -42,7 +42,7 @@ public class JoinPrimitives {
   /**
    * Helper to convert gather map data from JNI to GatherMap array
    */
-  private static GatherMap[] gatherMapsFromJNI(long[] gatherMapData) {
+  static GatherMap[] gatherMapsFromJNI(long[] gatherMapData) {
     long bufferSize = gatherMapData[0];
     long leftAddr = gatherMapData[1];
     long leftHandle = gatherMapData[2];
