@@ -44,11 +44,36 @@
 #include <thrust/sort.h>
 #include <thrust/unique.h>
 
+#include <algorithm>
 #include <limits>
 
 namespace spark_rapids_jni {
 
 namespace {
+
+__global__ void update_outer_join_tracker_kernel(uint32_t* bitmap,
+                                                 cudf::size_type const* indices,
+                                                 cudf::size_type num_indices,
+                                                 cudf::size_type num_rows)
+{
+  auto const stride = cudf::detail::grid_1d::grid_stride();
+  for (auto i = cudf::detail::grid_1d::global_thread_id(); i < num_indices; i += stride) {
+    auto const index = indices[i];
+    if (index >= 0 && index < num_rows) {
+      atomicOr(bitmap + index / 32, uint32_t{1} << (index % 32));
+    }
+  }
+}
+
+__global__ void outer_join_unmatched_mask_kernel(uint32_t const* bitmap,
+                                                 bool* unmatched,
+                                                 cudf::size_type num_rows)
+{
+  auto const stride = cudf::detail::grid_1d::grid_stride();
+  for (auto i = cudf::detail::grid_1d::global_thread_id(); i < num_rows; i += stride) {
+    unmatched[i] = (bitmap[i / 32] & (uint32_t{1} << (i % 32))) == 0;
+  }
+}
 
 // Type alias for intermediate storage used in AST expression evaluation.
 template <bool has_nulls>
@@ -572,6 +597,59 @@ std::unique_ptr<cudf::column> get_matched_rows(cudf::device_span<cudf::size_type
                      result_data[idx] = true;
                    });
 
+  return result;
+}
+
+std::unique_ptr<rmm::device_buffer> create_outer_join_tracker(cudf::size_type num_rows,
+                                                              rmm::cuda_stream_view stream,
+                                                              rmm::device_async_resource_ref mr)
+{
+  CUDF_EXPECTS(num_rows >= 0, "negative build row count");
+  auto const words = std::max<size_t>(1, (static_cast<size_t>(num_rows) + 31) / 32);
+  auto result      = std::make_unique<rmm::device_buffer>(words * sizeof(uint32_t), stream, mr);
+  CUDF_CUDA_TRY(cudaMemsetAsync(result->data(), 0, result->size(), stream.value()));
+  return result;
+}
+
+void update_outer_join_tracker(cudf::device_span<uint32_t> bitmap,
+                               cudf::column_view const& gather_indices,
+                               cudf::size_type num_rows,
+                               rmm::cuda_stream_view stream)
+{
+  CUDF_EXPECTS(num_rows >= 0, "negative build row count");
+  CUDF_EXPECTS(bitmap.size() >= (static_cast<size_t>(num_rows) + 31) / 32,
+               "outer join bitmap is too small");
+  CUDF_EXPECTS(gather_indices.type().id() == cudf::type_id::INT32 && !gather_indices.has_nulls(),
+               "gather indices must be non-null INT32");
+  if (gather_indices.is_empty()) { return; }
+  cudf::detail::grid_1d const grid(gather_indices.size(), 256);
+  update_outer_join_tracker_kernel<<<grid.num_blocks,
+                                     grid.num_threads_per_block,
+                                     0,
+                                     stream.value()>>>(
+    bitmap.data(), gather_indices.data<cudf::size_type>(), gather_indices.size(), num_rows);
+  CUDF_CUDA_TRY(cudaGetLastError());
+}
+
+std::unique_ptr<cudf::column> outer_join_unmatched_mask(cudf::device_span<uint32_t const> bitmap,
+                                                        cudf::size_type num_rows,
+                                                        rmm::cuda_stream_view stream,
+                                                        rmm::device_async_resource_ref mr)
+{
+  CUDF_EXPECTS(num_rows >= 0, "negative build row count");
+  CUDF_EXPECTS(bitmap.size() >= (static_cast<size_t>(num_rows) + 31) / 32,
+               "outer join bitmap is too small");
+  auto result = cudf::make_fixed_width_column(
+    cudf::data_type{cudf::type_id::BOOL8}, num_rows, cudf::mask_state::UNALLOCATED, stream, mr);
+  if (num_rows != 0) {
+    cudf::detail::grid_1d const grid(num_rows, 256);
+    outer_join_unmatched_mask_kernel<<<grid.num_blocks,
+                                       grid.num_threads_per_block,
+                                       0,
+                                       stream.value()>>>(
+      bitmap.data(), result->mutable_view().data<bool>(), num_rows);
+    CUDF_CUDA_TRY(cudaGetLastError());
+  }
   return result;
 }
 

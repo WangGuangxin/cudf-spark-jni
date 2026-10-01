@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.
+ * Copyright (c) 2025-2026, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -86,6 +86,56 @@ cudf::device_span<cudf::size_type const> wrap_buffer_as_span(void* buffer_addres
 }  // anonymous namespace
 
 extern "C" {
+
+JNIEXPORT jlongArray JNICALL
+Java_com_nvidia_spark_rapids_jni_JoinPrimitives_nativeCreateOuterJoinTracker(JNIEnv* env,
+                                                                             jclass,
+                                                                             jint num_rows)
+{
+  JNI_TRY
+  {
+    cudf::jni::auto_set_device(env);
+    auto buffer = spark_rapids_jni::create_outer_join_tracker(num_rows);
+    cudf::jni::native_jlongArray result(env, 3);
+    result[0] = static_cast<jlong>(buffer->size());
+    result[1] = cudf::jni::ptr_as_jlong(buffer->data());
+    result[2] = cudf::jni::release_as_jlong(buffer);
+    return result.get_jArray();
+  }
+  JNI_CATCH(env, nullptr);
+}
+
+JNIEXPORT void JNICALL Java_com_nvidia_spark_rapids_jni_JoinPrimitives_nativeUpdateOuterJoinTracker(
+  JNIEnv* env, jclass, jlong bitmap_address, jlong bitmap_length, jlong gather_view, jint num_rows)
+{
+  JNI_NULL_CHECK(env, bitmap_address, "bitmap is null", );
+  JNI_NULL_CHECK(env, gather_view, "gather indices are null", );
+  JNI_TRY
+  {
+    cudf::jni::auto_set_device(env);
+    auto bitmap        = cudf::device_span<uint32_t>(reinterpret_cast<uint32_t*>(bitmap_address),
+                                              bitmap_length / sizeof(uint32_t));
+    auto const indices = reinterpret_cast<cudf::column_view const*>(gather_view);
+    spark_rapids_jni::update_outer_join_tracker(bitmap, *indices, num_rows);
+  }
+  JNI_CATCH(env, );
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_nvidia_spark_rapids_jni_JoinPrimitives_nativeOuterJoinUnmatchedMask(
+  JNIEnv* env, jclass, jlong bitmap_address, jlong bitmap_length, jint num_rows)
+{
+  JNI_NULL_CHECK(env, bitmap_address, "bitmap is null", 0);
+  JNI_TRY
+  {
+    cudf::jni::auto_set_device(env);
+    auto bitmap = cudf::device_span<uint32_t const>(
+      reinterpret_cast<uint32_t const*>(bitmap_address), bitmap_length / sizeof(uint32_t));
+    return cudf::jni::release_as_jlong(
+      spark_rapids_jni::outer_join_unmatched_mask(bitmap, num_rows));
+  }
+  JNI_CATCH(env, 0);
+}
 
 // =============================================================================
 // BASIC EQUALITY JOINS (Sort-Merge and Hash)

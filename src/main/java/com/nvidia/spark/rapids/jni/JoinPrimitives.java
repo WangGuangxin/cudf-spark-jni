@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.
+ * Copyright (c) 2025-2026, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@
 package com.nvidia.spark.rapids.jni;
 
 import ai.rapids.cudf.ColumnVector;
+import ai.rapids.cudf.ColumnView;
+import ai.rapids.cudf.DType;
 import ai.rapids.cudf.DeviceMemoryBuffer;
 import ai.rapids.cudf.GatherMap;
 import ai.rapids.cudf.NativeDepsLoader;
@@ -58,6 +60,50 @@ public class JoinPrimitives {
   private static GatherMap gatherMapFromJNI(long bufferAddr, long bufferSize, long bufferHandle) {
     return new GatherMap(DeviceMemoryBuffer.fromRmm(bufferAddr, bufferSize, bufferHandle));
   }
+
+  /** Allocate a zeroed matched-row bitmap. The caller owns the returned buffer. */
+  public static DeviceMemoryBuffer createOuterJoinTracker(int numRows) {
+    if (numRows < 0) {
+      throw new IllegalArgumentException("negative build row count");
+    }
+    long[] result = nativeCreateOuterJoinTracker(numRows);
+    return DeviceMemoryBuffer.fromRmm(result[1], result[0], result[2]);
+  }
+
+  /**
+   * Mark matching build rows in place, ignoring negative and out-of-range gather indices.
+   * The caller must hold exclusive ownership of the bitmap and preserve it until the
+   * default CUDA stream completes. Neither input is closed by this method.
+   */
+  public static void updateOuterJoinTracker(DeviceMemoryBuffer bitmap,
+                                            ColumnView gatherIndices, int numRows) {
+    checkOuterJoinTracker(bitmap, numRows);
+    if (!gatherIndices.getType().equals(DType.INT32) || gatherIndices.getNullCount() != 0) {
+      throw new IllegalArgumentException("gather indices must be non-null INT32");
+    }
+    nativeUpdateOuterJoinTracker(bitmap.getAddress(), bitmap.getLength(),
+        gatherIndices.getNativeView(), numRows);
+  }
+
+  /** Expand unmatched bits into a boolean filter column. The caller owns the result. */
+  public static ColumnVector outerJoinUnmatchedMask(DeviceMemoryBuffer bitmap, int numRows) {
+    checkOuterJoinTracker(bitmap, numRows);
+    return new ColumnVector(nativeOuterJoinUnmatchedMask(
+        bitmap.getAddress(), bitmap.getLength(), numRows));
+  }
+
+  private static void checkOuterJoinTracker(DeviceMemoryBuffer bitmap, int numRows) {
+    long requiredBytes = Math.max(1L, (numRows + 31L) / 32L) * Integer.BYTES;
+    if (numRows < 0 || bitmap.getLength() < requiredBytes) {
+      throw new IllegalArgumentException("invalid outer join bitmap size");
+    }
+  }
+
+  private static native long[] nativeCreateOuterJoinTracker(int numRows);
+  private static native void nativeUpdateOuterJoinTracker(
+      long bitmapAddress, long bitmapLength, long gatherView, int numRows);
+  private static native long nativeOuterJoinUnmatchedMask(
+      long bitmapAddress, long bitmapLength, int numRows);
 
   // =============================================================================
   // BASIC EQUALITY JOINS (Sort-Merge and Hash)
