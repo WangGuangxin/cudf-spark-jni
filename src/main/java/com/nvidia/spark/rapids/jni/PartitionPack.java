@@ -59,34 +59,6 @@ public final class PartitionPack {
     }
   }
 
-  /** Merge canonical partial buffers and write final packed partitions. Inputs are borrowed.
-   * One INT32/INT64 grouping key, followed by INT64 SUM=0, MIN=1, MAX=2, COUNT=3 buffers.
-   * Uses Spark Murmur3 with seed 42. Caller owns the returned tables.
-   */
-  public static ContiguousTable[] partialAggregateAndPack(
-      Table buffers, int[] operations, int numPartitions) {
-    if (numPartitions <= 0) {
-      throw new IllegalArgumentException("Partition count must be positive");
-    }
-    ContiguousTable[] result = new ContiguousTable[numPartitions];
-    boolean success = false;
-    try {
-      partialAggregateAndPack(buffers.getNativeView(), operations, result);
-      success = true;
-      return result;
-    } finally {
-      if (!success) {
-        for (ContiguousTable partition : result) {
-          if (partition != null) {
-            partition.close();
-          }
-        }
-      }
-    }
-  }
-
-  private static native void partialAggregateAndPack(
-      long tableView, int[] operations, ContiguousTable[] result);
   private static native boolean isSupported(long tableView);
   private static native void partitionAndPack(
       long tableView, long partitionIds, ContiguousTable[] result);

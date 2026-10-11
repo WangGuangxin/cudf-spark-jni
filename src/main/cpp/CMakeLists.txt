@@ -293,7 +293,6 @@ add_library(
   src/round_float.cu
   src/shuffle_assemble.cu
   src/partition_pack.cu
-  src/partial_aggregate_pack.cu
   src/shuffle_split.cu
   src/substring_index.cu
   src/timezones.cu
