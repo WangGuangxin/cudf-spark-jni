@@ -29,4 +29,10 @@ std::pair<std::vector<cudf::packed_columns>, std::vector<cudf::size_type>> parti
   cudf::size_type num_partitions,
   rmm::cuda_stream_view stream,
   rmm::device_async_resource_ref mr);
+// Merge canonical Spark partial buffers directly into hash-partitioned packed allocations.
+// One INT32/INT64 key; INT64 SUM(0), MIN(1), MAX(2), COUNT merge(3) buffers.
+std::pair<std::vector<cudf::packed_columns>, std::vector<cudf::size_type>> partial_aggregate_pack(
+  cudf::table_view const& input, std::vector<int> const& operations,
+  cudf::size_type num_partitions, rmm::cuda_stream_view stream,
+  rmm::device_async_resource_ref mr);
 }  // namespace spark_rapids_jni

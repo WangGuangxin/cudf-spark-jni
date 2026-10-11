@@ -16,6 +16,8 @@
 #include "partition_pack.hpp"
 
 #include <cudf/copying.hpp>
+#include <cudf/concatenate.hpp>
+#include <climits>
 #include <cudf/partitioning.hpp>
 #include <cudf/sorting.hpp>
 #include <cudf/table/table.hpp>
@@ -57,5 +59,31 @@ TEST_F(PartitionPackTests, SlicedNullablePayloadAndPartitionIds)
       auto actual_sorted = cudf::sort(cudf::unpack(packed[p]));
       CUDF_TEST_EXPECT_TABLES_EQUAL(expected_sorted->view(), actual_sorted->view());
     }
+  }
+}
+
+TEST_F(PartitionPackTests, PartialMergeSlicedNullableAndWrapping)
+{
+  cudf::test::fixed_width_column_wrapper<int32_t> keys(
+    {99, 1, 1, 0, 0, 2, 2, 99}, {true, true, true, false, false, true, true, true});
+  cudf::test::fixed_width_column_wrapper<int64_t> values(
+    std::initializer_list<int64_t>{99, LLONG_MAX, 1, 4, -4, 0, 0, 99}, {true, true, true, true, true, false, false, true});
+  cudf::test::fixed_width_column_wrapper<int64_t> counts({99, 2, 3, 4, 5, 6, 7, 99});
+  auto input = cudf::slice(cudf::table_view{{keys, values, values, values, counts}}, {1, 7}).front();
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_keys({1, 0, 2}, {true, false, true});
+  cudf::test::fixed_width_column_wrapper<int64_t> sums(std::initializer_list<int64_t>{LLONG_MIN, 0, 0}, {true, true, false});
+  cudf::test::fixed_width_column_wrapper<int64_t> mins({1, -4, 0}, {true, true, false});
+  cudf::test::fixed_width_column_wrapper<int64_t> maxs(std::initializer_list<int64_t>{LLONG_MAX, 4, 0}, {true, true, false});
+  cudf::test::fixed_width_column_wrapper<int64_t> expected_counts({5, 9, 13});
+  auto expected = cudf::sort(cudf::table_view{{expected_keys, sums, mins, maxs, expected_counts}});
+  for (int partitions : {1, 2, 128}) {
+    auto [packed, boundaries] = spark_rapids_jni::partial_aggregate_pack(
+      input, {0, 1, 2, 3}, partitions, cudf::get_default_stream(), cudf::get_current_device_resource_ref());
+    EXPECT_EQ(boundaries.back(), 3);
+    std::vector<cudf::table_view> views;
+    for (auto const& table : packed) { views.push_back(cudf::unpack(table)); }
+    auto combined = cudf::concatenate(views);
+    auto actual = cudf::sort(combined->view());
+    CUDF_TEST_EXPECT_TABLES_EQUAL(expected->view(), actual->view());
   }
 }

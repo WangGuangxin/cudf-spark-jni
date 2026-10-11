@@ -54,4 +54,29 @@ JNIEXPORT void JNICALL Java_com_nvidia_spark_rapids_jni_PartitionPack_partitionA
   }
   JNI_CATCH(env, );
 }
+JNIEXPORT void JNICALL Java_com_nvidia_spark_rapids_jni_PartitionPack_partialAggregateAndPack(
+  JNIEnv* env, jclass, jlong table_view, jintArray operations, jobjectArray output)
+{
+  JNI_NULL_CHECK(env, table_view, "table is null", );
+  JNI_NULL_CHECK(env, operations, "operations are null", );
+  JNI_NULL_CHECK(env, output, "output is null", );
+  JNI_TRY
+  {
+    cudf::jni::auto_set_device(env);
+    std::vector<int> ops(env->GetArrayLength(operations));
+    env->GetIntArrayRegion(operations, 0, ops.size(), ops.data());
+    if (env->ExceptionCheck()) { return; }
+    auto [packed, boundaries] = spark_rapids_jni::partial_aggregate_pack(
+      *reinterpret_cast<cudf::table_view const*>(table_view), ops, env->GetArrayLength(output),
+      cudf::get_default_stream(), cudf::get_current_device_resource_ref());
+    for (size_t p = 0; p < packed.size(); ++p) {
+      auto table = cudf::jni::contiguous_table_from(env, packed[p], boundaries[p + 1] - boundaries[p]);
+      if (env->ExceptionCheck() || table == nullptr) { return; }
+      env->SetObjectArrayElement(output, p, table);
+      env->DeleteLocalRef(table);
+      if (env->ExceptionCheck()) { return; }
+    }
+  }
+  JNI_CATCH(env, );
+}
 }  // extern "C"
