@@ -46,20 +46,20 @@ namespace spark_rapids_jni {
 /** Allocate a zeroed bitmap with one matched bit per build row. */
 std::unique_ptr<rmm::device_buffer> create_outer_join_tracker(
   cudf::size_type num_rows,
-  rmm::cuda_stream_view stream      = cudf::get_default_stream(),
+  cuda::stream_ref stream           = cudf::get_default_stream(),
   rmm::device_async_resource_ref mr = cudf::get_current_device_resource_ref());
 
 /** Mark valid gather indices atomically in place. Does not allocate or copy the gather map. */
 void update_outer_join_tracker(cudf::device_span<uint32_t> bitmap,
                                cudf::column_view const& gather_indices,
                                cudf::size_type num_rows,
-                               rmm::cuda_stream_view stream = cudf::get_default_stream());
+                               cuda::stream_ref stream = cudf::get_default_stream());
 
 /** Return a boolean filter column for build rows whose matched bit remains unset. */
 std::unique_ptr<cudf::column> outer_join_unmatched_mask(
   cudf::device_span<uint32_t const> bitmap,
   cudf::size_type num_rows,
-  rmm::cuda_stream_view stream      = cudf::get_default_stream(),
+  cuda::stream_ref stream           = cudf::get_default_stream(),
   rmm::device_async_resource_ref mr = cudf::get_current_device_resource_ref());
 
 // =============================================================================
