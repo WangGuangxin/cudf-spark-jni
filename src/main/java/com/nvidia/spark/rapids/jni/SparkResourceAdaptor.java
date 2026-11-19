@@ -46,8 +46,9 @@ public class SparkResourceAdaptor
    * startup, which is guaranteed to be single threaded, and when shutting down, which is really only
    * a concern in unit tests. We also need to protect ourselves internally from the watchdog thread.
    * This will only ever call one method `checkAndBreakDeadlocks`, which can be called with a lock held.
-   * As such it is synchronized along with any method that accesses `handle` directly. The locks around
-   * handle do not eliminate any races. They are there to just make it much less likely.
+   * As such it is synchronized along with close(). `handle` is volatile so the hot-path
+   * readers (isOpen/getHandle) do not need the lock. The locks around handle do not eliminate
+   * any races. They are there to just make it much less likely.
    */
 
   /**
@@ -57,7 +58,13 @@ public class SparkResourceAdaptor
   private static final long pollingPeriod = Long.getLong(
       "ai.rapids.cudf.spark.rmmWatchdogPollingPeriod", 100);
 
-  private long handle = 0;
+  // volatile so that isOpen()/getHandle() can be read without taking this object's monitor.
+  // They are called 2-3 times per host allocation/free (RmmSpark.preCpuAlloc,
+  // postCpuAllocSuccess, cpuDeallocate), and the watchdog holds the monitor while it runs
+  // checkAndBreakDeadlocks, so a synchronized getter serializes every host alloc in the process.
+  // close() and checkAndBreakDeadlocks() stay synchronized, so the watchdog still never calls
+  // into native code with a released handle.
+  private volatile long handle = 0;
 
   /**
    * Create a new tracking resource adaptor.
@@ -82,7 +89,7 @@ public class SparkResourceAdaptor
   }
 
   @Override
-  public synchronized long getHandle() {
+  public long getHandle() {
     return handle;
   }
 
@@ -96,7 +103,7 @@ public class SparkResourceAdaptor
   }
 
 
-  public synchronized boolean isOpen() {
+  public boolean isOpen() {
     return handle != 0;
   }
 
