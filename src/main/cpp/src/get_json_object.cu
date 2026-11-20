@@ -727,8 +727,8 @@ struct json_path_processing_data {
 
 /**
  * Evaluates one (row, path) per active thread; padded path slots and rows return without parsing.
- * A row uses `num_threads_per_row` threads: a packed power-of-two group for 2–16 paths (so one
- * warp spans multiple rows); 1 and 17+ paths use whole warp(s).
+ * A row uses `num_threads_per_row` threads: a packed power-of-two group for 1–32 paths (so one
+ * warp spans multiple rows); 33+ paths use whole warps.
  *
  * Keep both __launch_bounds__ arguments: NVCC's default register heuristic caused costly spilling
  * in this parser. Specifying min_block_per_sm lets it use more registers within the launch limit
@@ -814,8 +814,9 @@ struct kernel_launcher {
     static constexpr int block_size       = 128;
     static constexpr int min_block_per_sm = 8;
     constexpr std::size_t warp_size       = 32;  // matches cudf::detail::warp_size
-    // Power-of-two groups pack short path batches: 3 paths use 4 threads; 1 and 33 use 32 and 64.
-    auto const num_threads_per_row = path_data.size() <= warp_size && path_data.size() > 1
+    // Power-of-two groups pack short path batches: 1 path uses 1 thread, 3 paths use 4 threads,
+    // 33 paths use 64. A whole warp per single-path row leaves 31 of 32 lanes idle.
+    auto const num_threads_per_row = path_data.size() <= warp_size
                                        ? std::bit_ceil(path_data.size())
                                        : cuda::ceil_div(path_data.size(), warp_size) * warp_size;
     auto const num_blocks =
