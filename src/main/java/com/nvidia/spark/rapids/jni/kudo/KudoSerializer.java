@@ -165,7 +165,9 @@ import java.util.stream.IntStream;
  *     </li>
  *     <li>For offset buffer, it only copies buffers without calculating an exact offset buffer. For example, when we want
  *  *  to serialize rows [3, 9) of the original table, instead of calculating the exact offset values by subtracting
- *  *  first value, it just copies the offset buffer values of rows [3, 9).
+ *  *  first value, it just copies the offset buffer values of rows [3, 9). String columns are the exception: their
+ *  *  offsets are written minus the first one, so they start at 0, because small values compress better. Readers
+ *  *  must only use differences between the offsets of a string column.
  *  *  </li>
  *  </ol>
  */
