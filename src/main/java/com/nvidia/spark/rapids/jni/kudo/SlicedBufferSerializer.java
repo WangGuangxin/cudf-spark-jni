@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025, NVIDIA CORPORATION.
+ * Copyright (c) 2024-2026, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,11 @@ import java.util.Deque;
  * </p>
  */
 class SlicedBufferSerializer implements HostColumnsVisitor {
+  // Number of string offsets rebased per chunk, and a per-thread buffer for one chunk.
+  private static final int REBASE_CHUNK_INTS = 4096;
+  private static final ThreadLocal<byte[]> REBASE_BUFFER =
+      ThreadLocal.withInitial(() -> new byte[REBASE_CHUNK_INTS * Integer.BYTES]);
+
   private final SliceInfo root;
   private final BufferType bufferType;
   private final DataWriter writer;
@@ -213,7 +218,48 @@ class SlicedBufferSerializer implements HostColumnsVisitor {
       }
     }
 
-    return copyBuffer(column.getOffsets(), srcOffset, bytesToCopy);
+    if (column.getType().equals(DType.STRING)) {
+      return copyRebasedOffsets(column.getOffsets(), srcOffset, sliceInfo.rowCount + 1);
+    } else {
+      return copyBuffer(column.getOffsets(), srcOffset, bytesToCopy);
+    }
+  }
+
+  /**
+   * Writes `count` string offsets starting at `srcOffset`, minus the first of them, so the
+   * written offsets start at 0. Readers only use differences between a string column's offsets,
+   * and small offsets compress much better than positions in a large column. List offsets are
+   * copied as is because readers use the first one to locate the child rows.
+   */
+  private long copyRebasedOffsets(HostMemoryBuffer offsets, long srcOffset, int count)
+      throws IOException {
+    int first = offsets.getInt(srcOffset);
+    long length = (long) count * Integer.BYTES;
+    if (first == 0) {
+      return copyBuffer(offsets, srcOffset, length);
+    }
+    long start = addCopyBufferTime ? System.nanoTime() : 0;
+    byte[] buf = REBASE_BUFFER.get();
+    long done = 0;
+    while (done < count) {
+      int n = (int) Math.min(REBASE_CHUNK_INTS, count - done);
+      offsets.getBytes(buf, 0, srcOffset + done * Integer.BYTES, (long) n * Integer.BYTES);
+      for (int i = 0; i < n * Integer.BYTES; i += Integer.BYTES) {
+        // Offsets are little endian in host memory and in the kudo body.
+        int v = ((buf[i] & 0xFF) | ((buf[i + 1] & 0xFF) << 8) | ((buf[i + 2] & 0xFF) << 16) |
+            ((buf[i + 3] & 0xFF) << 24)) - first;
+        buf[i] = (byte) v;
+        buf[i + 1] = (byte) (v >>> 8);
+        buf[i + 2] = (byte) (v >>> 16);
+        buf[i + 3] = (byte) (v >>> 24);
+      }
+      writer.write(buf, 0, n * Integer.BYTES);
+      done += n;
+    }
+    if (addCopyBufferTime) {
+      metrics.addCopyBufferTime(System.nanoTime() - start);
+    }
+    return length;
   }
 
   private long copySlicedData(HostColumnVectorCore column, SliceInfo sliceInfo) throws IOException {

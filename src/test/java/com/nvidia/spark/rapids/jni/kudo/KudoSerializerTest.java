@@ -248,6 +248,36 @@ public class KudoSerializerTest extends CudfTestBase {
   }
 
   @Test
+  public void testStringOffsetsAreRebased() throws Exception {
+    try (Table t = new Table.TestBuilder()
+        .column("abc", "de", null, "", "fghij", "k", "lmnopq")
+        .column(1, 2, 3, 4, 5, 6, 7)
+        .build();
+         HostColumnVector strings = t.getColumn(0).copyToHost();
+         HostColumnVector ints = t.getColumn(1).copyToHost()) {
+      KudoSerializer serializer = new KudoSerializer(schemaOf(t));
+      ByteArrayOutputStream out = new ByteArrayOutputStream();
+      serializer.writeToStreamWithMetrics(new HostColumnVector[] {strings, ints}, out, 4, 3);
+      byte[] bytes = out.toByteArray();
+
+      KudoTableHeader header =
+          KudoTableHeader.readFrom(new DataInputStream(new ByteArrayInputStream(bytes))).get();
+      assertEquals(3, header.getNumRows());
+      // Rows 4 to 6 are "fghij", "k" and "lmnopq": offsets 0, 5, 6, 12 instead of 6, 11, 12, 18.
+      assertEquals(4 * Integer.BYTES, header.getOffsetBufferLen());
+      java.nio.ByteBuffer body = java.nio.ByteBuffer.wrap(bytes, header.getSerializedSize(),
+          bytes.length - header.getSerializedSize()).slice()
+          .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+      int start = header.startOffsetOf(BufferType.OFFSET);
+      int[] offsets = new int[4];
+      for (int i = 0; i < offsets.length; i++) {
+        offsets[i] = body.getInt(start + i * Integer.BYTES);
+      }
+      assertArrayEquals(new int[] {0, 5, 6, 12}, offsets);
+    }
+  }
+
+  @Test
   public void testMergeList() {
     Arms.withResource(new ArrayList<Table>(), tables -> {
       Table table1 = new Table.TestBuilder()
